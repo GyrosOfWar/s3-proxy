@@ -23,16 +23,27 @@ use actix_web::{http::{ContentEncoding, StatusCode},
                 HttpRequest,
                 HttpResponse};
 use failure::Error;
-use futures::{Future, Stream};
+use futures::{future, Future, Stream};
 
 type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Config {
-    pub port: u16,
+    /// Host to bind to
     pub host: String,
-    pub bucket: String,
+
+    /// Port to bind to
+    pub port: u16,
+
+    /// Which bucket, if any, to use
+    /// (if none is specified, it gets passed with the URL)
+    pub bucket: Option<String>,
+
+    /// Which AWS region to use.
     pub region: String,
+
+    #[serde(default)]
+    pub url_prefix: String,
 }
 
 fn read_config() -> Result<Config> {
@@ -61,14 +72,38 @@ struct State {
     config: Config,
 }
 
+struct PathInfo {
+    bucket: Option<String>,
+    key: String,
+}
+
+fn parse_path<S: AsRef<str>>(path: &str, bucket: Option<S>) -> Option<PathInfo> {
+    let parts: Vec<_> = path.splitn(2, '/').collect();
+    match parts.len() {
+        1 => Some(PathInfo {
+            bucket: bucket.map(|s| s.as_ref().to_string()),
+            key: path.into(),
+        }),
+        2 => Some(PathInfo {
+            bucket: Some(parts[0].into()),
+            key: parts[1].into(),
+        }),
+        _ => unreachable!(),
+    }
+}
+
+fn four_oh_four() -> Box<Future<Item = HttpResponse, Error = Error>> {
+    Box::new(future::ok(
+        HttpResponse::NotFound().body("Resource not found!"),
+    ))
+}
+
 fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = Error>> {
     use bytes::Bytes;
     use s3::S3;
 
     // TODO handle missing keys (404)
     // TODO reject empty keys
-    let s3_key = &req.path()[1..];
-    debug!("Handling request to {}", s3_key);
     let client = Arc::clone(&req.state().s3_client);
     let config = &req.state().config;
     let range = req.headers()
@@ -76,11 +111,26 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
         .and_then(|r| r.to_str().ok())
         .map(From::from);
 
+    let path: String = req.match_info().query("path").unwrap();
+
+    let PathInfo { bucket, key } = match parse_path(&path, config.bucket.as_ref()) {
+        Some(info) => {
+            if info.bucket.is_none() {
+                return four_oh_four();
+            } else {
+                info
+            }
+        }
+        None => {
+            return four_oh_four();
+        }
+    };
+
     debug!("Request headers: {:?}", req.headers());
     let resp = client
         .get_object(&s3::GetObjectRequest {
-            bucket: config.bucket.clone(),
-            key: s3_key.into(),
+            bucket: bucket.unwrap(),
+            key,
             range,
             ..Default::default()
         })
@@ -136,12 +186,16 @@ fn run() -> Result<()> {
     let region = config.region.parse()?;
     let s3_client = Arc::new(s3::S3Client::simple(region));
     let addr = format!("{}:{}", config.host, config.port);
-
+    let route = if config.url_prefix.is_empty() {
+        String::from("/{path:.+}")
+    } else {
+        format!("/{}/{{path:.+}}", config.url_prefix)
+    };
     server::new(move || {
         App::with_state(State {
             s3_client: Arc::clone(&s3_client),
             config: config.clone(),
-        }).resource("/{path:.+}", |r| r.f(handler))
+        }).resource(&route, |r| r.f(handler))
     }).bind(addr)?
         .run();
 
@@ -151,5 +205,21 @@ fn run() -> Result<()> {
 fn main() {
     if let Err(e) = run() {
         eprintln!("Error: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_path() {
+        use super::parse_path;
+
+        const BUCKET: &str = "bucket_name";
+        const KEY: &str = "key/to/the/file.mp4";
+
+        let path = format!("{}/{}", BUCKET, KEY);
+        let result = parse_path::<String>(&path, None).unwrap();
+        assert_eq!(result.bucket.unwrap(), BUCKET);
+        assert_eq!(result.key, KEY);
     }
 }
