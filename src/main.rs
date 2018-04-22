@@ -15,7 +15,13 @@ extern crate log4rs;
 
 use std::sync::Arc;
 
-use actix_web::{http::StatusCode, server, App, Body, HttpMessage, HttpRequest, HttpResponse};
+use actix_web::{http::{ContentEncoding, StatusCode},
+                server,
+                App,
+                Body,
+                HttpMessage,
+                HttpRequest,
+                HttpResponse};
 use failure::Error;
 use futures::{Future, Stream};
 
@@ -70,7 +76,7 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
         .and_then(|r| r.to_str().ok())
         .map(From::from);
 
-    debug!("Range header: {:?}", range);
+    debug!("Request headers: {:?}", req.headers());
     let resp = client
         .get_object(&s3::GetObjectRequest {
             bucket: config.bucket.clone(),
@@ -80,35 +86,44 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
         })
         .from_err()
         .map(|res| {
-            info!("S3 response: {:?}", res);
+            debug!("S3 response: {:?}", res);
 
             let body = res.body
                 .expect("No body for response")
                 .map(Bytes::from)
                 .map_err(Error::from);
             let mut builder = HttpResponse::Ok();
-            builder.chunked();
-            
+
             if let Some(content_length) = res.content_length {
+                debug!("Content-Length: {}", content_length);
                 builder.content_length(content_length as u64);
             }
             if let Some(content_type) = res.content_type {
+                if content_type.starts_with("audio") || content_type.starts_with("video")
+                    || content_type.starts_with("image")
+                {
+                    builder.content_encoding(ContentEncoding::Identity);
+                }
+                debug!("Content-Type: {}", content_type);
                 builder.content_type(content_type.as_str());
             }
             if let Some(e_tag) = res.e_tag {
                 builder.header("ETag", e_tag);
             }
             if let Some(content_range) = res.content_range {
+                debug!("Content-Range: {}", content_range);
                 builder.header("Content-Range", content_range);
+                builder.status(StatusCode::PARTIAL_CONTENT);
             }
             if let Some(accept_ranges) = res.accept_ranges {
+                debug!("Accept-Ranges: {}", accept_ranges);
                 builder.header("Accept-Ranges", accept_ranges);
-                builder.status(StatusCode::PARTIAL_CONTENT);
             }
             if let Some(last_modified) = res.last_modified {
                 builder.header("Last-Modified", last_modified);
             }
 
+            debug!("--- Sending request --- ");
             builder.body(Body::Streaming(Box::new(body.map_err(From::from))))
         });
 
@@ -118,7 +133,7 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
 fn run() -> Result<()> {
     configure_logger();
     let config = read_config()?;
-    let region: aws::Region = config.region.parse()?;
+    let region = config.region.parse()?;
     let s3_client = Arc::new(s3::S3Client::simple(region));
     let addr = format!("{}:{}", config.host, config.port);
 
