@@ -5,7 +5,7 @@ authors = ["Martin Tomasi <martin.tomasi@gmail.com>"]
 
 [dependencies]
 actix = "0.5"
-actix-web = "0.5"
+actix-web = "0.6.4"
 log = "0.4.1"
 log4rs = "0.8.0"
 rusoto_core = "0.32.0"

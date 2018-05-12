@@ -140,8 +140,8 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
     let bucket = req.match_info()
         .query("bucket")
         .ok()
-        .filter_val(|s: &String| s.len() > 0)
-        .or(config.bucket.clone());
+        .filter_val(|s: &String| !s.is_empty())
+        .or_else(|| config.bucket.clone());
 
     debug!("Request headers: {:?}", req.headers());
     let resp = client
@@ -174,12 +174,10 @@ fn build_route(config: &Config) -> String {
         } else {
             String::from("/{{bucket}}/{{path:.+}}")
         }
+    } else if config.bucket.is_some() {
+        format!("/{}/{{bucket}}/{{path:.+}}", config.url_prefix)
     } else {
-        if config.bucket.is_some() {
-            format!("/{}/{{bucket}}/{{path:.+}}", config.url_prefix)
-        } else {
-            format!("/{}/{{path:.+}}", config.url_prefix)
-        }
+        format!("/{}/{{path:.+}}", config.url_prefix)
     }
 }
 
