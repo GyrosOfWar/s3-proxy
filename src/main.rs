@@ -12,13 +12,15 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate toml;
+extern crate num_cpus;
 
 use std::sync::Arc;
 
-use actix_web::{server, App, Body, HttpMessage, HttpRequest, HttpResponse,
-                http::{ContentEncoding, StatusCode}};
+use actix_web::{
+    http::{ContentEncoding, StatusCode}, server, App, Body, HttpMessage, HttpRequest, HttpResponse,
+};
 use failure::Error;
-use futures::{Future, Stream, future::Either};
+use futures::{future::Either, Future, Stream};
 
 trait OptionExt<T> {
     fn filter_val<P: FnOnce(&T) -> bool>(self, predicate: P) -> Self;
@@ -54,6 +56,8 @@ struct Config {
 
     #[serde(default)]
     pub url_prefix: String,
+
+    pub workers: Option<usize>,
 }
 
 fn read_config() -> Result<Config> {
@@ -86,7 +90,8 @@ fn handle_response(res: s3::GetObjectOutput) -> HttpResponse {
     use bytes::Bytes;
     debug!("S3 response: {:?}", res);
 
-    let body = res.body
+    let body = res
+        .body
         .expect("No body for response")
         .map(Bytes::from)
         .map_err(Error::from);
@@ -97,7 +102,9 @@ fn handle_response(res: s3::GetObjectOutput) -> HttpResponse {
         builder.content_length(content_length as u64);
     }
     if let Some(content_type) = res.content_type {
-        if content_type.starts_with("audio") || content_type.starts_with("video")
+        // Don't gzip media files
+        if content_type.starts_with("audio")
+            || content_type.starts_with("video")
             || content_type.starts_with("image")
         {
             builder.content_encoding(ContentEncoding::Identity);
@@ -131,13 +138,15 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
     // TODO reject empty keys
     let client = Arc::clone(&req.state().s3_client);
     let config = &req.state().config;
-    let range = req.headers()
+    let range = req
+        .headers()
         .get("Range")
         .and_then(|r| r.to_str().ok())
         .map(From::from);
 
     let key: String = req.match_info().query("path").unwrap();
-    let bucket = req.match_info()
+    let bucket = req
+        .match_info()
         .query("bucket")
         .ok()
         .filter_val(|s: &String| !s.is_empty())
@@ -189,6 +198,7 @@ fn run() -> Result<()> {
     }
     let region = config.region.parse()?;
     let s3_client = Arc::new(s3::S3Client::simple(region));
+    let workers = config.workers;
     let addr = format!("{}:{}", config.host, config.port);
     let route = build_route(&config);
     info!("Main route mounted at {}", route);
@@ -197,7 +207,9 @@ fn run() -> Result<()> {
             s3_client: Arc::clone(&s3_client),
             config: config.clone(),
         }).resource(&route, |r| r.f(handler))
-    }).bind(addr)?
+    })
+        .workers(workers.unwrap_or(num_cpus::get()))
+        .bind(addr)?
         .run();
 
     Ok(())
