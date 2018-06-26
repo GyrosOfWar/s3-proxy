@@ -11,13 +11,16 @@ extern crate rusoto_s3 as s3;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate toml;
+extern crate mime_guess;
 extern crate num_cpus;
+extern crate toml;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use actix_web::{
-    http::{ContentEncoding, StatusCode}, server, App, Body, HttpMessage, HttpRequest, HttpResponse,
+    http::{ContentEncoding, StatusCode},
+    server, App, Body, HttpMessage, HttpRequest, HttpResponse,
 };
 use failure::Error;
 use futures::{future::Either, Future, Stream};
@@ -86,7 +89,7 @@ struct State {
     config: Config,
 }
 
-fn handle_response(res: s3::GetObjectOutput) -> HttpResponse {
+fn handle_response(res: s3::GetObjectOutput, key: String) -> HttpResponse {
     use bytes::Bytes;
     debug!("S3 response: {:?}", res);
 
@@ -107,10 +110,21 @@ fn handle_response(res: s3::GetObjectOutput) -> HttpResponse {
             || content_type.starts_with("video")
             || content_type.starts_with("image")
         {
+            debug!("not GZIPping media file");
             builder.content_encoding(ContentEncoding::Identity);
         }
-        debug!("Content-Type: {}", content_type);
-        builder.content_type(content_type.as_str());
+        if content_type == "binary/octet-stream" || content_type == "application/octet-stream" {
+            if let Some(extension) = Path::new(&key).extension().and_then(|s| s.to_str()) {
+                debug!("File has extension {}", extension);
+                let mime = mime_guess::get_mime_type(extension);
+                let mime = mime.as_ref();
+                debug!("Determined file type {} from extension", mime);
+                builder.content_type(mime);
+            }
+        } else {
+            debug!("Content-Type: {}", content_type);
+            builder.content_type(content_type.as_str());
+        }
     }
     if let Some(e_tag) = res.e_tag {
         builder.header("ETag", e_tag);
@@ -127,6 +141,8 @@ fn handle_response(res: s3::GetObjectOutput) -> HttpResponse {
     if let Some(last_modified) = res.last_modified {
         builder.header("Last-Modified", last_modified);
     }
+
+    builder.header("Cache-Control", "public, max-age=31536000");
 
     debug!("--- Sending request --- ");
     builder.body(Body::Streaming(Box::new(body.map_err(From::from))))
@@ -156,7 +172,7 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
     let resp = client
         .get_object(&s3::GetObjectRequest {
             bucket: bucket.unwrap(),
-            key,
+            key: key.clone(),
             range,
             ..Default::default()
         })
@@ -169,7 +185,7 @@ fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = E
         })
         .from_err()
         .map(|res| match res {
-            Either::A(res) => handle_response(res),
+            Either::A(res) => handle_response(res, key),
             Either::B(res) => res,
         });
 
@@ -207,8 +223,7 @@ fn run() -> Result<()> {
             s3_client: Arc::clone(&s3_client),
             config: config.clone(),
         }).resource(&route, |r| r.f(handler))
-    })
-        .workers(workers.unwrap_or(num_cpus::get()))
+    }).workers(workers.unwrap_or_else(|| num_cpus::get()))
         .bind(addr)?
         .run();
 

@@ -21,3 +21,7 @@ root:
   appenders:
     - stdout
     - rolling_log
+
+# loggers:
+#   s3_proxy:
+#     level: debug
