@@ -4,8 +4,8 @@ version = "0.1.0"
 authors = ["Martin Tomasi <martin.tomasi@gmail.com>"]
 
 [dependencies]
-actix-web = "0.6.4"
-log = "0.4.1"
+actix-web = "0.7.1"
+log = "0.4.3"
 log4rs = "0.8.0"
 rusoto_core = "0.32.0"
 rusoto_s3 = "0.32.0"
@@ -14,6 +14,6 @@ serde_derive = "1.0"
 toml = "0.4.6"
 failure = "0.1.1"
 futures = "0.1"
-bytes = "0.4.6"
+bytes = "0.4.9"
 num_cpus = "1.8.0"
 mime_guess = "2.0.0-alpha.4"

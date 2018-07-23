@@ -147,7 +147,7 @@ fn handle_response(res: s3::GetObjectOutput, key: String) -> HttpResponse {
     builder.body(Body::Streaming(Box::new(body.map_err(From::from))))
 }
 
-fn handler(req: HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = Error>> {
+fn handler(req: &HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = Error>> {
     use s3::S3;
 
     // TODO reject empty keys
@@ -206,11 +206,15 @@ fn build_route(config: &Config) -> String {
 }
 
 fn run() -> Result<()> {
+    use actix_web::middleware;
+    
     configure_logger();
     let config = read_config()?;
+
     if let Some(ref bucket) = config.bucket {
         info!("Hosting content from bucket '{}' ", bucket);
     }
+
     let region = config.region.parse()?;
     let s3_client = Arc::new(s3::S3Client::simple(region));
     let workers = config.workers;
@@ -222,6 +226,7 @@ fn run() -> Result<()> {
             s3_client: Arc::clone(&s3_client),
             config: config.clone(),
         }).resource(&route, |r| r.f(handler))
+          .middleware(middleware::Logger::new(r#"%t "%r" %s %b %T"#))
     }).workers(workers.unwrap_or_else(|| num_cpus::get()))
         .bind(addr)?
         .run();
