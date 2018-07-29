@@ -216,6 +216,10 @@ fn run() -> Result<()> {
         config.bucket = Some(bucket);
     }
 
+    if let Some(port) = env::var("S3_PROXY_PORT").ok().and_then(|p| p.parse().ok()) {
+        config.port = port;
+    }
+
     if let Some(ref bucket) = config.bucket {
         info!("Hosting content from bucket '{}' ", bucket);
     }
