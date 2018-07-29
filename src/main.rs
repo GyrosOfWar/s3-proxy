@@ -206,10 +206,15 @@ fn build_route(config: &Config) -> String {
 }
 
 fn run() -> Result<()> {
+    use std::env;
     use actix_web::middleware;
     
     configure_logger();
-    let config = read_config()?;
+    let mut config = read_config()?;
+
+    if let Ok(bucket) = env::var("S3_BUCKET") {
+        config.bucket = Some(bucket);
+    }
 
     if let Some(ref bucket) = config.bucket {
         info!("Hosting content from bucket '{}' ", bucket);
