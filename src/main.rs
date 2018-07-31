@@ -18,11 +18,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use actix_web::{
-    http::{ContentEncoding, StatusCode},
-    server, App, Body, HttpMessage, HttpRequest, HttpResponse,
+    http::Method, http::{ContentEncoding, StatusCode}, server, App, Body, HttpMessage, HttpRequest,
+    HttpResponse, Path as UrlPath,
 };
 use failure::Error;
-use futures::{future::Either, Future, Stream};
+use futures::{
+    future::{self, Either}, Future, Stream,
+};
 
 trait OptionExt<T> {
     fn filter_val<P: FnOnce(&T) -> bool>(self, predicate: P) -> Self;
@@ -50,15 +52,12 @@ struct Config {
     pub port: u16,
 
     /// Which bucket, if any, to use
-    /// (if none is specified, it gets passed with the URL)
-    pub bucket: Option<String>,
+    pub bucket: String,
 
     /// Which AWS region to use.
     pub region: String,
 
-    #[serde(default)]
-    pub url_prefix: String,
-
+    /// Number of actix workers
     pub workers: Option<usize>,
 }
 
@@ -92,8 +91,7 @@ fn handle_response(res: s3::GetObjectOutput, key: String) -> HttpResponse {
     use bytes::Bytes;
     debug!("S3 response: {:?}", res);
 
-    let body = res
-        .body
+    let body = res.body
         .expect("No body for response")
         .map(Bytes::from)
         .map_err(Error::from);
@@ -147,30 +145,29 @@ fn handle_response(res: s3::GetObjectOutput, key: String) -> HttpResponse {
     builder.body(Body::Streaming(Box::new(body.map_err(From::from))))
 }
 
-fn handler(req: &HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = Error>> {
+fn handler(
+    (req, path): (HttpRequest<State>, UrlPath<String>),
+) -> Box<Future<Item = HttpResponse, Error = Error>> {
     use s3::S3;
 
-    // TODO reject empty keys
     let client = Arc::clone(&req.state().s3_client);
     let config = &req.state().config;
-    let range = req
-        .headers()
+    let range = req.headers()
         .get("Range")
         .and_then(|r| r.to_str().ok())
         .map(From::from);
 
-    let key: String = req.match_info().query("path").unwrap();
-    let bucket = req
-        .match_info()
-        .query("bucket")
-        .ok()
-        .filter_val(|s: &String| !s.is_empty())
-        .or_else(|| config.bucket.clone());
+    let key = path.into_inner();
+    let bucket = config.bucket.clone();
+
+    if key.is_empty() {
+        return Box::new(future::ok(HttpResponse::NotFound().body("404 - Not found")));
+    }
 
     debug!("Request headers: {:?}", req.headers());
     let resp = client
         .get_object(&s3::GetObjectRequest {
-            bucket: bucket.unwrap(),
+            bucket,
             key: key.clone(),
             range,
             ..Default::default()
@@ -191,51 +188,34 @@ fn handler(req: &HttpRequest<State>) -> Box<Future<Item = HttpResponse, Error = 
     Box::new(resp)
 }
 
-fn build_route(config: &Config) -> String {
-    if config.url_prefix.is_empty() {
-        if config.bucket.is_some() {
-            String::from("/{path:.+}")
-        } else {
-            String::from("/{{bucket}}/{{path:.+}}")
-        }
-    } else if config.bucket.is_some() {
-        format!("/{}/{{bucket}}/{{path:.+}}", config.url_prefix)
-    } else {
-        format!("/{}/{{path:.+}}", config.url_prefix)
-    }
-}
-
 fn run() -> Result<()> {
-    use std::env;
     use actix_web::middleware;
-    
+    use std::env;
+
     configure_logger();
     let mut config = read_config()?;
 
     if let Ok(bucket) = env::var("S3_BUCKET") {
-        config.bucket = Some(bucket);
+        config.bucket = bucket;
     }
 
     if let Some(port) = env::var("S3_PROXY_PORT").ok().and_then(|p| p.parse().ok()) {
         config.port = port;
     }
 
-    if let Some(ref bucket) = config.bucket {
-        info!("Hosting content from bucket '{}' ", bucket);
-    }
+    info!("Hosting content from bucket '{}' ", config.bucket);
 
     let region = config.region.parse()?;
     let s3_client = Arc::new(s3::S3Client::simple(region));
     let workers = config.workers;
     let addr = format!("{}:{}", config.host, config.port);
-    let route = build_route(&config);
-    info!("Main route mounted at {}", route);
+
     server::new(move || {
         App::with_state(State {
             s3_client: Arc::clone(&s3_client),
             config: config.clone(),
-        }).resource(&route, |r| r.f(handler))
-          .middleware(middleware::Logger::new(r#"%t "%r" %s %b %T"#))
+        }).middleware(middleware::Logger::new(r#"%t "%r" %s %b %T"#))
+            .route("/{path:.*}", Method::GET, handler)
     }).workers(workers.unwrap_or_else(|| num_cpus::get()))
         .bind(addr)?
         .run();
