@@ -216,6 +216,7 @@ fn run() -> Result<()> {
             config: config.clone(),
         }).middleware(middleware::Logger::new(r#"%t "%r" %s %b %T"#))
             .route("/{path:.*}", Method::GET, handler)
+            .route("/{path:.*}", Method::HEAD, handler)
     }).workers(workers.unwrap_or_else(|| num_cpus::get()))
         .bind(addr)?
         .run();
