@@ -166,7 +166,7 @@ fn handler(
 
     debug!("Request headers: {:?}", req.headers());
     let resp = client
-        .get_object(&s3::GetObjectRequest {
+        .get_object(s3::GetObjectRequest {
             bucket,
             key: key.clone(),
             range,
@@ -206,7 +206,7 @@ fn run() -> Result<()> {
     info!("Hosting content from bucket '{}' ", config.bucket);
 
     let region = config.region.parse()?;
-    let s3_client = Arc::new(s3::S3Client::simple(region));
+    let s3_client = Arc::new(s3::S3Client::new(region));
     let workers = config.workers;
     let addr = format!("{}:{}", config.host, config.port);
 
