@@ -1,22 +1,3 @@
-extern crate actix_web;
-extern crate bytes;
-extern crate failure;
-extern crate futures;
-#[macro_use]
-extern crate log;
-extern crate log4rs;
-extern crate rusoto_core as aws;
-extern crate rusoto_s3 as s3;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-extern crate mime_guess;
-extern crate num_cpus;
-extern crate toml;
-
-use std::path::Path;
-use std::sync::Arc;
-
 use actix_web::{
     http::Method,
     http::{ContentEncoding, StatusCode},
@@ -27,6 +8,11 @@ use futures::{
     future::{self, Either},
     Future, Stream,
 };
+use log::{debug, info};
+use rusoto_s3 as s3;
+use serde_derive::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::Arc;
 
 trait OptionExt<T> {
     fn filter_val<P: FnOnce(&T) -> bool>(self, predicate: P) -> Self;
@@ -154,8 +140,8 @@ fn handle_response(res: s3::GetObjectOutput, key: String) -> HttpResponse {
 
 fn handler(
     (req, path): (HttpRequest<State>, UrlPath<String>),
-) -> Box<Future<Item = HttpResponse, Error = Error>> {
-    use s3::S3;
+) -> Box<dyn Future<Item = HttpResponse, Error = Error>> {
+    use crate::s3::S3;
 
     let client = Arc::clone(&req.state().s3_client);
     let config = &req.state().config;

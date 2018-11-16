@@ -2,6 +2,7 @@
 name = "s3-proxy"
 version = "0.1.0"
 authors = ["Martin Tomasi <martin.tomasi@gmail.com>"]
+edition = "2018"
 
 [dependencies]
 actix-web = "0.7.14"
