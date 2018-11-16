@@ -18,12 +18,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use actix_web::{
-    http::Method, http::{ContentEncoding, StatusCode}, server, App, Body, HttpMessage, HttpRequest,
-    HttpResponse, Path as UrlPath,
+    http::Method,
+    http::{ContentEncoding, StatusCode},
+    server, App, Body, HttpMessage, HttpRequest, HttpResponse, Path as UrlPath,
 };
 use failure::Error;
 use futures::{
-    future::{self, Either}, Future, Stream,
+    future::{self, Either},
+    Future, Stream,
 };
 
 trait OptionExt<T> {
@@ -32,12 +34,16 @@ trait OptionExt<T> {
 
 impl<T> OptionExt<T> for Option<T> {
     fn filter_val<P: FnOnce(&T) -> bool>(self, predicate: P) -> Self {
-        if let Some(x) = self {
-            if predicate(&x) {
-                return Some(x);
+        match self {
+            Some(x) => {
+                if predicate(&x) {
+                    Some(x)
+                } else {
+                    None
+                }
             }
+            _ => None,
         }
-        None
     }
 }
 
@@ -91,7 +97,8 @@ fn handle_response(res: s3::GetObjectOutput, key: String) -> HttpResponse {
     use bytes::Bytes;
     debug!("S3 response: {:?}", res);
 
-    let body = res.body
+    let body = res
+        .body
         .expect("No body for response")
         .map(Bytes::from)
         .map_err(Error::from);
@@ -152,7 +159,8 @@ fn handler(
 
     let client = Arc::clone(&req.state().s3_client);
     let config = &req.state().config;
-    let range = req.headers()
+    let range = req
+        .headers()
         .get("Range")
         .and_then(|r| r.to_str().ok())
         .map(From::from);
@@ -214,12 +222,14 @@ fn run() -> Result<()> {
         App::with_state(State {
             s3_client: Arc::clone(&s3_client),
             config: config.clone(),
-        }).middleware(middleware::Logger::new(r#"%t "%r" %s %b %T"#))
-            .route("/{path:.*}", Method::GET, handler)
-            .route("/{path:.*}", Method::HEAD, handler)
-    }).workers(workers.unwrap_or_else(|| num_cpus::get()))
-        .bind(addr)?
-        .run();
+        })
+        .middleware(middleware::Logger::new(r#"%t "%r" %s %b %T"#))
+        .route("/{path:.*}", Method::GET, handler)
+        .route("/{path:.*}", Method::HEAD, handler)
+    })
+    .workers(workers.unwrap_or_else(|| num_cpus::get()))
+    .bind(addr)?
+    .run();
 
     Ok(())
 }
