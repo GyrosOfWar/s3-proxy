@@ -28,25 +28,6 @@ use futures::{
     Future, Stream,
 };
 
-trait OptionExt<T> {
-    fn filter_val<P: FnOnce(&T) -> bool>(self, predicate: P) -> Self;
-}
-
-impl<T> OptionExt<T> for Option<T> {
-    fn filter_val<P: FnOnce(&T) -> bool>(self, predicate: P) -> Self {
-        match self {
-            Some(x) => {
-                if predicate(&x) {
-                    Some(x)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
 type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -148,7 +129,7 @@ fn handle_response(res: s3::GetObjectOutput, key: String) -> HttpResponse {
 
     builder.header("Cache-Control", "public, max-age=31536000");
 
-    debug!("--- Sending request --- ");
+    debug!("--- Sending request ---");
     builder.body(Body::Streaming(Box::new(body.map_err(From::from))))
 }
 
